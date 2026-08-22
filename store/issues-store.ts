@@ -1,9 +1,11 @@
-import { groupIssuesByStatus, Issue, issues as mockIssues } from '@/mock-data/issues';
+import { groupIssuesByStatus, Issue } from '@/mock-data/issues';
 import { LabelInterface } from '@/mock-data/labels';
 import { Priority } from '@/mock-data/priorities';
 import { Project } from '@/mock-data/projects';
 import { Status } from '@/mock-data/status';
 import { User } from '@/mock-data/users';
+import * as remote from '@/lib/data/mutations';
+import { toast } from 'sonner';
 import { create } from 'zustand';
 
 interface FilterOptions {
@@ -20,6 +22,9 @@ interface IssuesState {
    // Data
    issues: Issue[];
    issuesByStatus: Record<string, Issue[]>;
+
+   /** Substitui o conteúdo do store pelos dados vindos do servidor. */
+   hydrate: (issues: Issue[]) => void;
 
    //
    getAllIssues: () => Issue[];
@@ -59,45 +64,78 @@ interface IssuesState {
    getIssueById: (id: string) => Issue | undefined;
 }
 
+/** Reaplica o estado derivado sempre que a lista muda. */
+const withGrouping = (issues: Issue[]) => ({
+   issues,
+   issuesByStatus: groupIssuesByStatus(issues),
+});
+
 export const useIssuesStore = create<IssuesState>((set, get) => ({
-   // Initial state
-   issues: mockIssues.sort((a, b) => b.rank.localeCompare(a.rank)),
-   issuesByStatus: groupIssuesByStatus(mockIssues),
+   // Vazio até o WorkspaceProvider hidratar com os dados do banco.
+   issues: [],
+   issuesByStatus: {},
+
+   hydrate: (issues: Issue[]) => {
+      set(withGrouping([...issues].sort((a, b) => b.rank.localeCompare(a.rank))));
+   },
 
    //
    getAllIssues: () => get().issues,
 
-   // Actions
+   /*
+    * As três ações abaixo são otimistas: a tela muda na hora e a escrita segue
+    * para o Supabase. Se a escrita falhar, o estado anterior volta e um toast
+    * avisa — nunca fica uma alteração só na tela, sem correspondente no banco.
+    */
    addIssue: (issue: Issue) => {
-      set((state) => {
-         const newIssues = [...state.issues, issue];
-         return {
-            issues: newIssues,
-            issuesByStatus: groupIssuesByStatus(newIssues),
-         };
-      });
+      const previous = get().issues;
+      set(withGrouping([...previous, issue]));
+
+      remote
+         .createIssue({
+            title: issue.title,
+            teamId: issue.teamId,
+            statusId: issue.status.id,
+            rank: issue.rank,
+            description: issue.description,
+            priorityId: issue.priority.id,
+            assigneeId: issue.assignee?.id ?? null,
+            projectId: issue.project?.id ?? null,
+            cycleId: issue.cycleId || null,
+            dueDate: issue.dueDate ?? null,
+            labels: issue.labels,
+         })
+         .then(({ id, identifier }) => {
+            // Troca o id provisório pelo definitivo e adota o identificador do banco.
+            set((state) =>
+               withGrouping(
+                  state.issues.map((i) => (i.id === issue.id ? { ...i, id, identifier } : i))
+               )
+            );
+         })
+         .catch((err: Error) => {
+            set(withGrouping(previous));
+            toast.error(err.message);
+         });
    },
 
    updateIssue: (id: string, updatedIssue: Partial<Issue>) => {
-      set((state) => {
-         const newIssues = state.issues.map((issue) =>
-            issue.id === id ? { ...issue, ...updatedIssue } : issue
-         );
+      const previous = get().issues;
+      set(withGrouping(previous.map((i) => (i.id === id ? { ...i, ...updatedIssue } : i))));
 
-         return {
-            issues: newIssues,
-            issuesByStatus: groupIssuesByStatus(newIssues),
-         };
+      remote.updateIssue(id, updatedIssue).catch((err: Error) => {
+         set(withGrouping(previous));
+         toast.error(err.message);
       });
    },
 
    deleteIssue: (id: string) => {
-      set((state) => {
-         const newIssues = state.issues.filter((issue) => issue.id !== id);
-         return {
-            issues: newIssues,
-            issuesByStatus: groupIssuesByStatus(newIssues),
-         };
+      const previous = get().issues;
+      set(withGrouping(previous.filter((issue) => issue.id !== id)));
+
+      remote.deleteIssue(id).catch((err: Error) => {
+         set(withGrouping(previous));
+         toast.error(err.message);
       });
    },
 

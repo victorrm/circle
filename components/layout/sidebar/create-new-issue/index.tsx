@@ -7,11 +7,14 @@ import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import { RiEditLine } from '@remixicon/react';
 import { useState, useEffect, useCallback } from 'react';
+import { useParams } from 'next/navigation';
 import { Issue } from '@/mock-data/issues';
 import { priorities } from '@/mock-data/priorities';
 import { status } from '@/mock-data/status';
 import { useIssuesStore } from '@/store/issues-store';
 import { useCreateIssueStore } from '@/store/create-issue-store';
+import { useTeams } from '@/components/providers/workspace-provider';
+import { LexoRank } from '@/lib/utils';
 import { toast } from 'sonner';
 import { v4 as uuidv4 } from 'uuid';
 import { StatusSelector } from './status-selector';
@@ -19,7 +22,6 @@ import { PrioritySelector } from './priority-selector';
 import { AssigneeSelector } from './assignee-selector';
 import { ProjectSelector } from './project-selector';
 import { LabelSelector } from './label-selector';
-import { ranks } from '@/mock-data/issues';
 import { DialogTitle } from '@radix-ui/react-dialog';
 
 export function CreateNewIssue() {
@@ -27,26 +29,28 @@ export function CreateNewIssue() {
    const { isOpen, defaultStatus, openModal, closeModal } = useCreateIssueStore();
    const { addIssue, getAllIssues } = useIssuesStore();
 
-   const generateUniqueIdentifier = useCallback(() => {
-      const identifiers = getAllIssues().map((issue) => issue.identifier);
-      let identifier = Math.floor(Math.random() * 999)
-         .toString()
-         .padStart(3, '0');
-      while (identifiers.includes(`LNUI-${identifier}`)) {
-         identifier = Math.floor(Math.random() * 999)
-            .toString()
-            .padStart(3, '0');
-      }
-      return identifier;
+   // A issue nasce no time da rota; fora de uma rota de time, no primeiro time.
+   const params = useParams<{ teamId?: string }>();
+   const teams = useTeams();
+   const team = teams.find((t) => t.id === params.teamId) ?? teams[0];
+
+   /** Rank logo após o último — mantém a nova issue no fim da coluna. */
+   const nextRank = useCallback(() => {
+      const ranks = getAllIssues().map((i) => i.rank);
+      if (ranks.length === 0) return 'a3c';
+      const last = ranks.reduce((max, r) => (r.localeCompare(max) > 0 ? r : max), ranks[0]);
+      return LexoRank.from(last).increment().toString();
    }, [getAllIssues]);
 
-   const createDefaultData = useCallback(() => {
-      const identifier = generateUniqueIdentifier();
+   const createDefaultData = useCallback((): Issue => {
       return {
          id: uuidv4(),
-         identifier: `LNUI-${identifier}`,
+         // Provisório: o identificador definitivo (GER-1, GER-2…) vem do banco,
+         // gerado por trigger, para dois clientes não colidirem.
+         identifier: '—',
          title: '',
          description: '',
+         teamId: team?.id ?? '',
          status: defaultStatus || status.find((s) => s.id === 'to-do')!,
          assignee: null,
          priority: priorities.find((p) => p.id === 'no-priority')!,
@@ -55,9 +59,9 @@ export function CreateNewIssue() {
          cycleId: '',
          project: undefined,
          subissues: [],
-         rank: ranks[ranks.length - 1],
+         rank: nextRank(),
       };
-   }, [defaultStatus, generateUniqueIdentifier]);
+   }, [defaultStatus, nextRank, team?.id]);
 
    const [addIssueForm, setAddIssueForm] = useState<Issue>(createDefaultData());
 
@@ -67,10 +71,14 @@ export function CreateNewIssue() {
 
    const createIssue = () => {
       if (!addIssueForm.title) {
-         toast.error('Title is required');
+         toast.error('O título é obrigatório');
          return;
       }
-      toast.success('Issue created');
+      if (!addIssueForm.teamId) {
+         toast.error('Nenhum time disponível para receber a issue.');
+         return;
+      }
+      toast.success('Issue criada');
       addIssue(addIssueForm);
       if (!createMore) {
          closeModal();
@@ -90,8 +98,12 @@ export function CreateNewIssue() {
                <DialogTitle>
                   <div className="flex items-center px-4 pt-4 gap-2">
                      <Button size="sm" variant="outline" className="gap-1.5">
-                        <Heart className="size-4 text-orange-500 fill-orange-500" />
-                        <span className="font-medium">CORE</span>
+                        {team?.icon ? (
+                           <span className="text-sm leading-none">{team.icon}</span>
+                        ) : (
+                           <Heart className="size-4 text-orange-500 fill-orange-500" />
+                        )}
+                        <span className="font-medium">{team?.id ?? '—'}</span>
                      </Button>
                   </div>
                </DialogTitle>
