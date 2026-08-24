@@ -3,13 +3,17 @@
  *
  *   pnpm db:invite ana@empresa.com
  *   pnpm db:invite ana@empresa.com --nome "Ana Souza" --time GERAL --admin
- *   pnpm db:invite --listar
  *   pnpm db:invite ana@empresa.com --revogar
+ *   pnpm db:invite ana@empresa.com --remover
+ *   pnpm db:invite --dominio empresa.com.br
+ *   pnpm db:invite --listar
  *
- * Cria o perfil já ativo. A pessoa ainda precisa de uma conta de login: ou se
- * cadastra pelo /login (se o cadastro público estiver ligado), ou você a cria em
- * Authentication → Users no painel. Nos dois casos o trigger liga a conta a este
- * perfil pelo e-mail, preservando o acesso concedido aqui.
+ * O cadastro é restrito a convidados (migração 0003): sem passar por aqui — ou
+ * por um domínio liberado — a criação da conta é recusada pelo banco, inclusive
+ * pelo painel do Supabase.
+ *
+ * Convidar cria o perfil já ativo. A pessoa então cria a conta em /login e o
+ * trigger a liga a este perfil pelo e-mail, preservando o acesso concedido aqui.
  *
  * Roda por conexão direta ao Postgres, fora da RLS — é operação de admin.
  */
@@ -24,20 +28,34 @@ interface Options {
    time?: string;
    admin: boolean;
    revogar: boolean;
+   remover: boolean;
    listar: boolean;
+   dominio?: string;
+   removerDominio: boolean;
 }
 
 function parseArgs(argv: string[]): Options {
-   const opts: Options = { admin: false, revogar: false, listar: false };
+   const opts: Options = {
+      admin: false,
+      revogar: false,
+      remover: false,
+      listar: false,
+      removerDominio: false,
+   };
 
    for (let i = 0; i < argv.length; i++) {
       const arg = argv[i];
       if (arg === '--admin') opts.admin = true;
       else if (arg === '--revogar') opts.revogar = true;
+      else if (arg === '--remover') opts.remover = true;
       else if (arg === '--listar') opts.listar = true;
       else if (arg === '--nome') opts.nome = argv[++i];
       else if (arg === '--time') opts.time = argv[++i];
-      else if (!arg.startsWith('--')) opts.email = arg;
+      else if (arg === '--dominio') opts.dominio = argv[++i];
+      else if (arg === '--remover-dominio') {
+         opts.dominio = argv[++i];
+         opts.removerDominio = true;
+      } else if (!arg.startsWith('--')) opts.email = arg;
    }
 
    return opts;
@@ -96,6 +114,67 @@ async function listar(client: Client) {
             '\nPara liberar: pnpm db:invite <email>'
       );
    }
+
+   const { rows: dominios } = await client.query<{ domain: string; note: string | null }>(
+      'select domain, note from public.allowed_domains order by domain'
+   );
+
+   console.log('\nDomínios liberados (convite por organização):');
+   if (dominios.length === 0) {
+      console.log('  (nenhum) — só entra quem for convidado individualmente');
+   } else {
+      for (const d of dominios) {
+         console.log(`  @${d.domain}${d.note ? `  — ${d.note}` : ''}`);
+      }
+   }
+}
+
+async function gerenciarDominio(client: Client, dominio: string, remover: boolean) {
+   const d = dominio.replace(/^@/, '').toLowerCase();
+
+   if (remover) {
+      const { rowCount } = await client.query(
+         'delete from public.allowed_domains where domain = $1',
+         [d]
+      );
+      if (rowCount === 0) {
+         console.error(`@${d} não estava liberado.`);
+         process.exit(1);
+      }
+      console.log(`✓ @${d} removido`);
+      console.log('  Quem já tem conta continua com acesso — use --revogar para tirar.');
+      return;
+   }
+
+   await client.query(
+      `insert into public.allowed_domains (domain) values ($1) on conflict do nothing`,
+      [d]
+   );
+   console.log(`✓ @${d} liberado`);
+   console.log(`  Qualquer e-mail @${d} pode criar conta e já entra ativo.`);
+}
+
+async function removerConvite(client: Client, email: string) {
+   const { rows } = await client.query<{ user_id: string | null }>(
+      'select user_id from public.profiles where lower(email) = lower($1)',
+      [email]
+   );
+
+   if (rows.length === 0) {
+      console.error(`Nenhum perfil com o e-mail ${email}.`);
+      process.exit(1);
+   }
+
+   if (rows[0].user_id) {
+      console.error(
+         `${email} já tem conta de login — remover o perfil deixaria a conta órfã.\n` +
+            'Use --revogar para tirar o acesso mantendo o histórico.'
+      );
+      process.exit(1);
+   }
+
+   await client.query('delete from public.profiles where lower(email) = lower($1)', [email]);
+   console.log(`✓ convite de ${email} removido`);
 }
 
 async function revogar(client: Client, email: string) {
@@ -167,11 +246,14 @@ async function convidar(client: Client, opts: Options) {
 async function main() {
    const opts = parseArgs(process.argv.slice(2));
 
-   if (!opts.listar && !opts.email) {
+   if (!opts.listar && !opts.email && !opts.dominio) {
       console.error(
          'Uso:\n' +
             '  pnpm db:invite <email> [--nome "Nome"] [--time ID] [--admin]\n' +
-            '  pnpm db:invite <email> --revogar\n' +
+            '  pnpm db:invite <email> --revogar          tira o acesso, mantém a conta\n' +
+            '  pnpm db:invite <email> --remover          apaga convite ainda não usado\n' +
+            '  pnpm db:invite --dominio empresa.com.br   libera a organização inteira\n' +
+            '  pnpm db:invite --remover-dominio empresa.com.br\n' +
             '  pnpm db:invite --listar'
       );
       process.exit(1);
@@ -185,7 +267,9 @@ async function main() {
 
    try {
       if (opts.listar) await listar(client);
+      else if (opts.dominio) await gerenciarDominio(client, opts.dominio, opts.removerDominio);
       else if (opts.revogar) await revogar(client, opts.email!);
+      else if (opts.remover) await removerConvite(client, opts.email!);
       else await convidar(client, opts);
    } finally {
       await client.end();
