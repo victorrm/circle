@@ -13,7 +13,7 @@
       "db:seed": "tsx scripts/seed.ts",
       "db:seed:demo": "tsx scripts/seed.ts --demo",
       "db:invite": "tsx scripts/invite.ts",
-      "prepare": "husky install"
+      "prepare": "husky || true"
    },
    "dependencies": {
       "@hookform/resolvers": "^4.1.2",
