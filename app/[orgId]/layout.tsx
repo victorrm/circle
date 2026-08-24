@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation';
 import { WorkspaceProvider } from '@/components/providers/workspace-provider';
 import { getWorkspace } from '@/lib/data/workspace';
+import { PendingAccess } from './pending-access';
 
 /**
  * Carrega o workspace uma única vez para todas as rotas de /[orgId].
@@ -12,6 +13,12 @@ export default async function OrgLayout({ children }: { children: React.ReactNod
 
    if (!workspace.currentUser) {
       redirect('/login');
+   }
+
+   // Autenticado, mas ainda não convidado: a RLS não lhe mostra nada, então
+   // renderizar a interface deixaria a impressão de app quebrado.
+   if (!workspace.isActive) {
+      return <PendingAccess email={workspace.currentUser.email} />;
    }
 
    return <WorkspaceProvider workspace={workspace}>{children}</WorkspaceProvider>;

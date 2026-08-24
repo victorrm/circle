@@ -45,11 +45,20 @@ const ISSUE = `
 /*                                   Sessão                                   */
 /* -------------------------------------------------------------------------- */
 
+export interface Membership {
+   user: User;
+   /** Falso quando a pessoa criou conta mas ainda não foi convidada. */
+   isActive: boolean;
+}
+
 /**
  * Perfil de quem está logado, ou null se não houver sessão.
  * Usa getUser() (valida o token no servidor), nunca getSession().
+ *
+ * `isActive` vem separado do `User` de propósito: é estado de autorização, não
+ * atributo de domínio — a interface de membros não deve exibi-lo por acidente.
  */
-export async function getCurrentProfile(): Promise<User | null> {
+export async function getCurrentProfile(): Promise<Membership | null> {
    const supabase = await createClient();
 
    const {
@@ -64,7 +73,9 @@ export async function getCurrentProfile(): Promise<User | null> {
       .maybeSingle<ProfileRow>();
 
    if (error) throw new Error(`Falha ao carregar perfil: ${error.message}`);
-   return data ? toUser(data) : null;
+   if (!data) return null;
+
+   return { user: toUser(data), isActive: data.is_active };
 }
 
 /* -------------------------------------------------------------------------- */

@@ -12,6 +12,7 @@
       "db:reset": "tsx scripts/db.ts --reset",
       "db:seed": "tsx scripts/seed.ts",
       "db:seed:demo": "tsx scripts/seed.ts --demo",
+      "db:invite": "tsx scripts/invite.ts",
       "prepare": "husky install"
    },
    "dependencies": {

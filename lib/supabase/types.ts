@@ -57,6 +57,8 @@ type ProfileRow = {
    status: PresenceStatus;
    timezone: string;
    joined_date: string;
+   /** Portão de acesso ao workspace. Falso = criou conta mas não foi convidado. */
+   is_active: boolean;
    created_at: string;
    updated_at: string;
 };
@@ -164,7 +166,7 @@ export type Database = {
          labels: Table<LabelRow>;
          profiles: Table<
             ProfileRow,
-            'user_id' | 'avatar_url' | 'role' | 'status' | 'timezone' | 'joined_date'
+            'user_id' | 'avatar_url' | 'role' | 'status' | 'timezone' | 'joined_date' | 'is_active'
          >;
          teams: Table<TeamRow, 'icon' | 'color' | 'issue_counter'>;
          team_members: Table<TeamMemberRow, 'joined_at'>;
